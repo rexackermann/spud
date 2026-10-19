@@ -9,8 +9,8 @@
 $ErrorActionPreference = "Stop"
 
 # ── Configure these before publishing ────────────────────────────────────
-$AdminPubKey       = "ssh-ed25519 AAAA_REPLACE_WITH_YOUR_PUBLIC_KEY spud-admin"
-$NtfyTopicPrefix   = "spud-REPLACE_WITH_RANDOM_STRING"
+$AdminPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMvKicOMTrRyFyWzYyEMn+WQ+9TYJ7YDhGo4NGPEktat spud-admin"
+$NtfyTopicPrefix = "spud-k9x2mq7r4p"
 # ─────────────────────────────────────────────────────────────────────────
 
 $SpudDir     = "$env:ProgramData\spud"
@@ -23,8 +23,8 @@ function Die { param($m) Write-Error "[spud] ERROR: $m"; exit 1 }
 Log "Spud installer — $([System.Environment]::OSVersion.VersionString) ($env:PROCESSOR_ARCHITECTURE)"
 
 # Check placeholders
-if ($AdminPubKey -like "*REPLACE*")     { Die "Set AdminPubKey in setup.ps1 before running." }
-if ($NtfyTopicPrefix -like "*REPLACE*") { Die "Set NtfyTopicPrefix in setup.ps1 before running." }
+if ($AdminPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMvKicOMTrRyFyWzYyEMn+WQ+9TYJ7YDhGo4NGPEktat spud-admin"
+if ($NtfyTopicPrefix = "spud-k9x2mq7r4p"
 
 New-Item -ItemType Directory -Force -Path $SpudDir | Out-Null
 
@@ -95,8 +95,8 @@ $AuthKeysPath = "$SshDataDir\administrators_authorized_keys"
 New-Item -ItemType Directory -Force -Path $SshDataDir | Out-Null
 
 $existing = if (Test-Path $AuthKeysPath) { Get-Content $AuthKeysPath -Raw } else { "" }
-if (-not $existing.Contains($AdminPubKey)) {
-    Add-Content -Path $AuthKeysPath -Value $AdminPubKey
+if (-not $existing.Contains($AdminPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMvKicOMTrRyFyWzYyEMn+WQ+9TYJ7YDhGo4NGPEktat spud-admin"
+    Add-Content -Path $AuthKeysPath -Value $AdminPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMvKicOMTrRyFyWzYyEMn+WQ+9TYJ7YDhGo4NGPEktat spud-admin"
     Log "Admin pubkey installed."
 }
 
@@ -136,7 +136,7 @@ if (-not (Test-Path $BorePath)) {
 }
 
 # ── Write tunnel loop script ──────────────────────────────────────────────
-$NtfyTopic = "$NtfyTopicPrefix-$env:COMPUTERNAME"
+$NtfyTopic = "$NtfyTopicPrefix = "spud-k9x2mq7r4p"
 
 @"
 # Spud tunnel loop for Windows

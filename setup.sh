@@ -7,8 +7,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/rex/spud/main/setup.sh | sh
 #
 # ── Configure these before publishing ────────────────────────────────────
-ADMIN_PUBKEY="ssh-ed25519 AAAA_REPLACE_WITH_YOUR_PUBLIC_KEY spud-admin"
-NTFY_TOPIC_PREFIX="spud-REPLACE_WITH_RANDOM_STRING"
+ADMIN_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMvKicOMTrRyFyWzYyEMn+WQ+9TYJ7YDhGo4NGPEktat spud-admin"
+NTFY_TOPIC_PREFIX="spud-k9x2mq7r4p"
 # Final ntfy topic per machine = $NTFY_TOPIC_PREFIX-$(hostname)
 # Subscribe on phone: ntfy app → + → ntfy.sh/$NTFY_TOPIC_PREFIX-*
 # ─────────────────────────────────────────────────────────────────────────
