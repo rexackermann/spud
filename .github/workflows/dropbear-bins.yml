@@ -1,41 +1,37 @@
 name: Build dropbear static binaries
 
-# Run manually or when this workflow file changes.
-# Produces dropbearmulti-ARCH static musl binaries and publishes them
-# as a GitHub release tagged "dropbear-bins" so setup.sh can fetch them.
+# Builds static dropbearmulti for all Spud-supported architectures using
+# zig cc as the cross-compiler (no external toolchain downloads needed).
+# Publishes binaries as a GitHub release tagged "dropbear-bins".
 
 on:
   workflow_dispatch:
 
-  # Every Monday at 03:00 UTC — picks up new dropbear releases automatically
+  # Every Monday at 03:00 UTC — picks up new dropbear releases
   schedule:
     - cron: '0 3 * * 1'
 
-  # On every push: only run if the release doesn't exist yet OR the workflow changed
+  # On push: only build if the release doesn't exist yet OR workflow changed
   push:
     branches: [master, main]
     paths:
       - '.github/workflows/dropbear-bins.yml'
 
 jobs:
-  # On a plain push (not schedule/dispatch), skip the full build if the
-  # dropbear-bins release already exists — avoids rebuilding on every commit.
   check:
     runs-on: ubuntu-latest
     outputs:
       should_build: ${{ steps.chk.outputs.should_build }}
     steps:
-      - name: Check if dropbear-bins release exists
+      - name: Check if dropbear-bins release already exists
         id: chk
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Always build on schedule or manual dispatch
           if [[ "${{ github.event_name }}" != "push" ]]; then
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # On push: build only if release is missing
           if gh release view dropbear-bins --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "Release already exists — skipping build."
             echo "should_build=false" >> "$GITHUB_OUTPUT"
@@ -48,95 +44,88 @@ jobs:
     needs: check
     if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            triple: x86_64-linux-musl
-            cc: x86_64-linux-musl-gcc
-          - arch: aarch64
-            triple: aarch64-linux-musl
-            cc: aarch64-linux-musl-gcc
-          - arch: armv7
-            triple: arm-linux-musleabihf
-            cc: arm-linux-musleabihf-gcc
-            extra_cflags: "-march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard"
-          - arch: armv6
-            triple: arm-linux-musleabihf
-            cc: arm-linux-musleabihf-gcc
-            extra_cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=hard"
-          - arch: mipsel
-            triple: mipsel-linux-musl
-            cc: mipsel-linux-musl-gcc
-          - arch: mips
-            triple: mips-linux-musl
-            cc: mips-linux-musl-gcc
-          - arch: i686
-            triple: i686-linux-musl
-            cc: i686-linux-musl-gcc
-          - arch: riscv64
-            triple: riscv64-linux-musl
-            cc: riscv64-linux-musl-gcc
 
     steps:
-      - name: Install musl cross-compiler (${{ matrix.triple }})
+      - name: Install Zig
         run: |
-          url="https://musl.cc/${{ matrix.triple }}-cross.tgz"
-          echo "Downloading $url"
-          wget -q "$url" -O toolchain.tgz
-          tar -xzf toolchain.tgz
-          echo "$PWD/${{ matrix.triple }}-cross/bin" >> "$GITHUB_PATH"
+          ZIG_VER="0.13.0"
+          wget -q --tries=3 \
+            "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz" \
+            -O zig.tar.xz
+          tar -xJf zig.tar.xz
+          echo "$PWD/zig-linux-x86_64-${ZIG_VER}" >> "$GITHUB_PATH"
+          zig version
 
       - name: Download dropbear source
         run: |
           DROPBEAR_VER="2024.86"
-          wget -q "https://matt.ucc.asn.au/dropbear/releases/dropbear-${DROPBEAR_VER}.tar.bz2"
+          wget -q --tries=3 \
+            "https://matt.ucc.asn.au/dropbear/releases/dropbear-${DROPBEAR_VER}.tar.bz2"
           tar -xjf "dropbear-${DROPBEAR_VER}.tar.bz2"
-          echo "DROPBEAR_DIR=$PWD/dropbear-${DROPBEAR_VER}" >> "$GITHUB_ENV"
+          echo "DROPBEAR_SRC=$PWD/dropbear-${DROPBEAR_VER}" >> "$GITHUB_ENV"
 
-      - name: Configure dropbear
+      - name: Build for all targets
         run: |
-          cd "$DROPBEAR_DIR"
-          # Disable everything we don't need to keep binary small
-          ./configure \
-            --host="${{ matrix.triple }}" \
-            CC="${{ matrix.cc }}" \
-            CFLAGS="-Os -static ${{ matrix.extra_cflags }}" \
-            LDFLAGS="-static" \
-            --disable-zlib \
-            --disable-shadow \
-            --disable-lastlog \
-            --disable-utmp \
-            --disable-utmpx \
-            --disable-wtmp \
-            --disable-wtmpx \
-            --disable-pututxline \
-            --disable-loginfunc \
-            --disable-pam
+          # FORMAT: "zig_target:extra_cflags:output_arch_name"
+          TARGETS=(
+            "x86_64-linux-musl::x86_64"
+            "aarch64-linux-musl::aarch64"
+            "arm-linux-musleabihf:-mcpu=cortex_a7:armv7"
+            "arm-linux-musleabihf:-mcpu=arm1176jzf_s:armv6"
+            "mipsel-linux-musl::mipsel"
+            "mips-linux-musl::mips"
+            "x86-linux-musl::i686"
+            "riscv64-linux-musl::riscv64"
+          )
 
-      - name: Build dropbearmulti
-        run: |
-          cd "$DROPBEAR_DIR"
-          make PROGRAMS="dropbearmulti" STATIC=1 -j"$(nproc)"
-          # Verify it's actually static
-          file dropbearmulti
-          ls -lh dropbearmulti
+          for entry in "${TARGETS[@]}"; do
+            IFS=: read -r ZIG_TARGET EXTRA_CFLAGS ARCH <<< "$entry"
+            echo ""
+            echo "══════════════════════════════════════════"
+            echo "  Building dropbearmulti-${ARCH} (${ZIG_TARGET})"
+            echo "══════════════════════════════════════════"
 
-      - name: Rename and strip
-        run: |
-          cp "$DROPBEAR_DIR/dropbearmulti" "dropbearmulti-${{ matrix.arch }}"
-          ${{ matrix.cc }} --version 2>&1 | head -1 || true
-          # Strip with the cross strip
-          "${{ matrix.triple }}-strip" "dropbearmulti-${{ matrix.arch }}" 2>/dev/null || \
-            strip "dropbearmulti-${{ matrix.arch }}" 2>/dev/null || true
-          ls -lh "dropbearmulti-${{ matrix.arch }}"
+            # Fresh copy of source for each arch
+            BUILD_DIR="build-${ARCH}"
+            cp -r "$DROPBEAR_SRC" "$BUILD_DIR"
+            pushd "$BUILD_DIR"
 
-      - name: Upload artifact
+            ./configure \
+              --host="$ZIG_TARGET" \
+              CC="zig cc -target ${ZIG_TARGET} ${EXTRA_CFLAGS}" \
+              AR="zig ar" \
+              RANLIB="zig ranlib" \
+              CFLAGS="-Os" \
+              LDFLAGS="-static" \
+              --disable-zlib \
+              --disable-shadow \
+              --disable-lastlog \
+              --disable-utmp \
+              --disable-utmpx \
+              --disable-wtmp \
+              --disable-wtmpx \
+              --disable-pututxline \
+              --disable-loginfunc \
+              --disable-pam
+
+            make PROGRAMS="dropbearmulti" STATIC=1 -j"$(nproc)"
+
+            # Verify it's actually static
+            file dropbearmulti
+            cp dropbearmulti "../dropbearmulti-${ARCH}"
+            popd
+            rm -rf "$BUILD_DIR"
+          done
+
+          echo ""
+          echo "All binaries:"
+          ls -lh dropbearmulti-*
+
+      - name: Upload all binaries as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dropbearmulti-${{ matrix.arch }}
-          path: dropbearmulti-${{ matrix.arch }}
+          name: dropbearmulti-all
+          path: dropbearmulti-*
 
   release:
     needs: [check, build]
@@ -145,24 +134,22 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download all binaries
+      - name: Download binaries
         uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
+          name: dropbearmulti-all
 
       - name: List binaries
         run: ls -lh dropbearmulti-*
 
       - name: "Publish as GitHub release (tag: dropbear-bins)"
         uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: dropbear-bins
           name: "Dropbear static musl binaries"
           body: |
             Pre-built static dropbearmulti binaries used by Spud's setup.sh.
-            Built from dropbear 2024.86 with musl.cc cross-compilers.
+            Built from dropbear 2024.86 with zig cc cross-compilation.
             Regenerate by re-running the "Build dropbear static binaries" workflow.
           files: dropbearmulti-*
           make_latest: "false"
