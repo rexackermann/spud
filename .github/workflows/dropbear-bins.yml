@@ -153,7 +153,7 @@ jobs:
       - name: List binaries
         run: ls -lh dropbearmulti-*
 
-      - name: Publish as GitHub release (tag: dropbear-bins)
+      - name: "Publish as GitHub release (tag: dropbear-bins)"
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -161,8 +161,8 @@ jobs:
           tag_name: dropbear-bins
           name: "Dropbear static musl binaries"
           body: |
-            Pre-built static `dropbearmulti` binaries used by Spud's `setup.sh`.
+            Pre-built static dropbearmulti binaries used by Spud's setup.sh.
             Built from dropbear 2024.86 with musl.cc cross-compilers.
             Regenerate by re-running the "Build dropbear static binaries" workflow.
           files: dropbearmulti-*
-          make_latest: false
+          make_latest: "false"
