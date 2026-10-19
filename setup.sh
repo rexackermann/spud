@@ -132,15 +132,34 @@ ensure_sshd() {
 _download_dropbear() {
     local arch
     arch="$(detect_arch)"
-    # Try to get latest dropbear release tag
-    local ver
-    ver="$(fetch_url https://api.github.com/repos/mkj/dropbear/releases/latest 2>/dev/null \
-          | grep '"tag_name"' | grep -oE 'DROPBEAR_[0-9.]+' | head -1)" || ver="DROPBEAR_2024.86"
-    local url="https://github.com/mkj/dropbear/releases/download/${ver}/dropbearmulti-${arch}"
-    log "Downloading dropbear static binary ($arch)..."
+
+    # Map bore arch string → our dropbearmulti binary name
+    local db_arch
+    case "$arch" in
+        x86_64-unknown-linux-musl)      db_arch="x86_64"  ;;
+        aarch64-unknown-linux-musl)     db_arch="aarch64" ;;
+        armv7-unknown-linux-musleabihf) db_arch="armv7"   ;;
+        arm-unknown-linux-musleabihf)   db_arch="armv6"   ;;
+        mipsel-unknown-linux-musl)      db_arch="mipsel"  ;;
+        mips-unknown-linux-musl)        db_arch="mips"    ;;
+        i686-unknown-linux-musl)        db_arch="i686"    ;;
+        riscv64gc-unknown-linux-musl)   db_arch="riscv64" ;;
+        *)
+            die "No static dropbear binary for arch: $arch. Install dropbear manually and re-run."
+            ;;
+    esac
+
+    # Binaries are built by .github/workflows/dropbear-bins.yml and published
+    # as a GitHub release in this same repo.
+    local url="https://github.com/rexackermann/spud/releases/download/dropbear-bins/dropbearmulti-${db_arch}"
+    log "Downloading static dropbear ($db_arch)..."
     fetch_to_file "$url" "$SPUD_DIR/dropbearmulti" \
-        || die "Failed to download dropbear for $arch. Try installing manually."
+        || die "Failed to download dropbear from $url
+  Make sure the 'dropbear-bins' release exists in the repo.
+  Run the 'Build dropbear static binaries' GitHub Actions workflow first."
+
     chmod +x "$SPUD_DIR/dropbearmulti"
+    # dropbearmulti acts as server/client/keygen depending on argv[0]
     ln -sf dropbearmulti "$SPUD_DIR/dropbear"
     ln -sf dropbearmulti "$SPUD_DIR/dropbearkey"
     ln -sf dropbearmulti "$SPUD_DIR/dbclient"
@@ -396,7 +415,7 @@ EOF
 # ── Main ──────────────────────────────────────────────────────────────────
 main() {
     log "Spud installer — $(uname -s) $(uname -m)"
-    log "ntfy topic: ${NTFY_TOPIC_PREFIX}-\$(hostname)"
+    log "ntfy topic: ${NTFY_TOPIC_PREFIX}-$(hostname)"
 
     [ "$(id -u)" -eq 0 ] || die "Must run as root. Try: sudo sh setup.sh"
 

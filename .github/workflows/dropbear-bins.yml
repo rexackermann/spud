@@ -1,0 +1,130 @@
+name: Build dropbear static binaries
+
+# Run manually or when this workflow file changes.
+# Produces dropbearmulti-ARCH static musl binaries and publishes them
+# as a GitHub release tagged "dropbear-bins" so setup.sh can fetch them.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/dropbear-bins.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            triple: x86_64-linux-musl
+            cc: x86_64-linux-musl-gcc
+          - arch: aarch64
+            triple: aarch64-linux-musl
+            cc: aarch64-linux-musl-gcc
+          - arch: armv7
+            triple: arm-linux-musleabihf
+            cc: arm-linux-musleabihf-gcc
+            extra_cflags: "-march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard"
+          - arch: armv6
+            triple: arm-linux-musleabihf
+            cc: arm-linux-musleabihf-gcc
+            extra_cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=hard"
+          - arch: mipsel
+            triple: mipsel-linux-musl
+            cc: mipsel-linux-musl-gcc
+          - arch: mips
+            triple: mips-linux-musl
+            cc: mips-linux-musl-gcc
+          - arch: i686
+            triple: i686-linux-musl
+            cc: i686-linux-musl-gcc
+          - arch: riscv64
+            triple: riscv64-linux-musl
+            cc: riscv64-linux-musl-gcc
+
+    steps:
+      - name: Install musl cross-compiler (${{ matrix.triple }})
+        run: |
+          url="https://musl.cc/${{ matrix.triple }}-cross.tgz"
+          echo "Downloading $url"
+          wget -q "$url" -O toolchain.tgz
+          tar -xzf toolchain.tgz
+          echo "$PWD/${{ matrix.triple }}-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Download dropbear source
+        run: |
+          DROPBEAR_VER="2024.86"
+          wget -q "https://matt.ucc.asn.au/dropbear/releases/dropbear-${DROPBEAR_VER}.tar.bz2"
+          tar -xjf "dropbear-${DROPBEAR_VER}.tar.bz2"
+          echo "DROPBEAR_DIR=$PWD/dropbear-${DROPBEAR_VER}" >> "$GITHUB_ENV"
+
+      - name: Configure dropbear
+        run: |
+          cd "$DROPBEAR_DIR"
+          # Disable everything we don't need to keep binary small
+          ./configure \
+            --host="${{ matrix.triple }}" \
+            CC="${{ matrix.cc }}" \
+            CFLAGS="-Os -static ${{ matrix.extra_cflags }}" \
+            LDFLAGS="-static" \
+            --disable-zlib \
+            --disable-shadow \
+            --disable-lastlog \
+            --disable-utmp \
+            --disable-utmpx \
+            --disable-wtmp \
+            --disable-wtmpx \
+            --disable-pututxline \
+            --disable-loginfunc \
+            --disable-pam
+
+      - name: Build dropbearmulti
+        run: |
+          cd "$DROPBEAR_DIR"
+          make PROGRAMS="dropbearmulti" STATIC=1 -j"$(nproc)"
+          # Verify it's actually static
+          file dropbearmulti
+          ls -lh dropbearmulti
+
+      - name: Rename and strip
+        run: |
+          cp "$DROPBEAR_DIR/dropbearmulti" "dropbearmulti-${{ matrix.arch }}"
+          ${{ matrix.cc }} --version 2>&1 | head -1 || true
+          # Strip with the cross strip
+          "${{ matrix.triple }}-strip" "dropbearmulti-${{ matrix.arch }}" 2>/dev/null || \
+            strip "dropbearmulti-${{ matrix.arch }}" 2>/dev/null || true
+          ls -lh "dropbearmulti-${{ matrix.arch }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dropbearmulti-${{ matrix.arch }}
+          path: dropbearmulti-${{ matrix.arch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: List binaries
+        run: ls -lh dropbearmulti-*
+
+      - name: Publish as GitHub release (tag: dropbear-bins)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dropbear-bins
+          name: "Dropbear static musl binaries"
+          body: |
+            Pre-built static `dropbearmulti` binaries used by Spud's `setup.sh`.
+            Built from dropbear 2024.86 with musl.cc cross-compilers.
+            Regenerate by re-running the "Build dropbear static binaries" workflow.
+          files: dropbearmulti-*
+          make_latest: false
