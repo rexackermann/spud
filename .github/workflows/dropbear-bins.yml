@@ -1,157 +1,301 @@
-name: Build dropbear static binaries
-
-# Builds static dropbearmulti for all Spud-supported architectures using
-# zig cc as the cross-compiler (no external toolchain downloads needed).
-# Publishes binaries as a GitHub release tagged "dropbear-bins".
+name: Build Dropbear static binaries
 
 on:
   workflow_dispatch:
+    inputs:
+      dropbear_version:
+        description: 'Dropbear version to build (for example 2026.94); leave empty for latest stable'
+        required: false
+        default: ''
+        type: string
 
-  # Every Monday at 03:00 UTC — picks up new dropbear releases
+  # Resolve the current upstream stable release on every scheduled run.
   schedule:
     - cron: '0 3 * * 1'
 
-  # On push: only build if the release doesn't exist yet OR workflow changed
+  # A workflow change should rebuild the binaries even when the release already exists.
   push:
     branches: [master, main]
     paths:
       - '.github/workflows/dropbear-bins.yml'
 
+permissions:
+  contents: read
+
+# Pin the cross-compiler for repeatability. Update deliberately after validating targets.
+env:
+  ZIG_VERSION: '0.15.2'
+
 jobs:
-  check:
+  resolve:
+    name: Resolve Dropbear version
     runs-on: ubuntu-latest
     outputs:
-      should_build: ${{ steps.chk.outputs.should_build }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Check if dropbear-bins release already exists
-        id: chk
+      - name: Resolve requested or latest stable release
+        id: version
         env:
-          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ github.event.inputs.dropbear_version }}
+        shell: bash
         run: |
-          if [[ "${{ github.event_name }}" != "push" ]]; then
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if gh release view dropbear-bins --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release already exists — skipping build."
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          if [[ -n "${REQUESTED_VERSION}" ]]; then
+            version="${REQUESTED_VERSION#DROPBEAR_}"
+            version="${version#dropbear-}"
           else
-            echo "Release missing — will build."
-            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            # Prefer the latest published GitHub release. If the API is temporarily
+            # unavailable/rate-limited, fall back to the highest versioned upstream tag.
+            if tag="$(curl --fail --location --silent --show-error \
+                --retry 2 --retry-all-errors --connect-timeout 15 --max-time 45 \
+                https://api.github.com/repos/mkj/dropbear/releases/latest \
+                | jq -er '.tag_name')"; then
+              :
+            else
+              echo 'GitHub Releases API failed; falling back to upstream tags.' >&2
+              tag="$(git ls-remote --tags --refs https://github.com/mkj/dropbear.git 'refs/tags/DROPBEAR_*' \
+                | awk -F/ '{print $NF}' | sort -V | tail -n 1)"
+            fi
+            version="${tag#DROPBEAR_}"
           fi
+
+          # Reject malformed input before it is used in a URL or file path.
+          if [[ ! "${version}" =~ ^[0-9]{4}\.[0-9]+$ ]]; then
+            echo "Invalid Dropbear version: ${version}" >&2
+            echo 'Use a version like 2026.94 or DROPBEAR_2026.94.' >&2
+            exit 1
+          fi
+
+          echo "Resolved Dropbear version: ${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
   build:
-    needs: check
-    if: needs.check.outputs.should_build == 'true'
+    name: Build ${{ matrix.arch }}
+    needs: resolve
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            zig_target: x86_64-linux-musl
+            extra_cflags: ''
+            expected_machine: 'Advanced Micro Devices X86-64'
+          - arch: aarch64
+            zig_target: aarch64-linux-musl
+            extra_cflags: ''
+            expected_machine: 'AArch64'
+          - arch: armv7
+            zig_target: arm-linux-musleabihf
+            extra_cflags: '-mcpu=cortex_a7'
+            expected_machine: 'ARM'
+          - arch: armv6
+            zig_target: arm-linux-musleabihf
+            extra_cflags: '-mcpu=arm1176jzf_s'
+            expected_machine: 'ARM'
+          - arch: mipsel
+            zig_target: mipsel-linux-musl
+            extra_cflags: ''
+            expected_machine: 'MIPS'
+          - arch: mips
+            zig_target: mips-linux-musl
+            extra_cflags: ''
+            expected_machine: 'MIPS'
+          - arch: i686
+            zig_target: x86-linux-musl
+            # LibTomCrypt documents this for 386-class x86 targets to avoid
+            # assuming the BSWAP instruction is available.
+            extra_cflags: '-DLTC_NO_BSWAP'
+            expected_machine: 'Intel 80386'
+          - arch: riscv64
+            zig_target: riscv64-linux-musl
+            extra_cflags: ''
+            expected_machine: 'RISC-V'
+
+    env:
+      DROPBEAR_VERSION: ${{ needs.resolve.outputs.version }}
 
     steps:
-      - name: Install Zig
+      - name: Install pinned Zig cross-compiler
+        shell: bash
         run: |
-          ZIG_VER="0.13.0"
-          wget -q --tries=3 \
-            "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz" \
-            -O zig.tar.xz
-          tar -xJf zig.tar.xz
-          # GITHUB_PATH applies to subsequent steps only; use full path here
-          ZIG_DIR="$PWD/zig-linux-x86_64-${ZIG_VER}"
-          echo "$ZIG_DIR" >> "$GITHUB_PATH"
-          "$ZIG_DIR/zig" version
+          set -euo pipefail
+          archive="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          zig_dir="${RUNNER_TEMP}/zig-x86_64-linux-${ZIG_VERSION}"
 
-      - name: Download dropbear source
+          curl --fail --location --silent --show-error \
+            --retry 3 --retry-all-errors --connect-timeout 15 --max-time 180 \
+            "https://ziglang.org/download/${ZIG_VERSION}/${archive}" \
+            --output "${RUNNER_TEMP}/${archive}"
+          tar -xJf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+
+          test -x "${zig_dir}/zig"
+          echo "${zig_dir}" >> "${GITHUB_PATH}"
+          "${zig_dir}/zig" version
+
+      - name: Download Dropbear source
+        shell: bash
         run: |
-          DROPBEAR_VER="2024.86"
-          wget -q --tries=3 \
-            "https://matt.ucc.asn.au/dropbear/releases/dropbear-${DROPBEAR_VER}.tar.bz2"
-          tar -xjf "dropbear-${DROPBEAR_VER}.tar.bz2"
-          echo "DROPBEAR_SRC=$PWD/dropbear-${DROPBEAR_VER}" >> "$GITHUB_ENV"
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/dropbear-${DROPBEAR_VERSION}.tar.bz2"
+          downloaded=false
 
-      - name: Build for all targets
-        run: |
-          # FORMAT: "zig_target:extra_cflags:output_arch_name"
-          TARGETS=(
-            "x86_64-linux-musl::x86_64"
-            "aarch64-linux-musl::aarch64"
-            "arm-linux-musleabihf:-mcpu=cortex_a7:armv7"
-            "arm-linux-musleabihf:-mcpu=arm1176jzf_s:armv6"
-            "mipsel-linux-musl::mipsel"
-            "mips-linux-musl::mips"
-            "x86-linux-musl::i686"
-            "riscv64-linux-musl::riscv64"
-          )
-
-          for entry in "${TARGETS[@]}"; do
-            IFS=: read -r ZIG_TARGET EXTRA_CFLAGS ARCH <<< "$entry"
-            echo ""
-            echo "══════════════════════════════════════════"
-            echo "  Building dropbearmulti-${ARCH} (${ZIG_TARGET})"
-            echo "══════════════════════════════════════════"
-
-            # Fresh copy of source for each arch
-            BUILD_DIR="build-${ARCH}"
-            cp -r "$DROPBEAR_SRC" "$BUILD_DIR"
-            pushd "$BUILD_DIR"
-
-            ./configure \
-              --host="$ZIG_TARGET" \
-              CC="zig cc -target ${ZIG_TARGET} ${EXTRA_CFLAGS}" \
-              AR="zig ar" \
-              RANLIB="zig ranlib" \
-              CFLAGS="-Os" \
-              LDFLAGS="-static" \
-              --disable-zlib \
-              --disable-shadow \
-              --disable-lastlog \
-              --disable-utmp \
-              --disable-utmpx \
-              --disable-wtmp \
-              --disable-wtmpx \
-              --disable-pututxline \
-              --disable-loginfunc \
-              --disable-pam
-
-            make PROGRAMS="dropbearmulti" STATIC=1 -j"$(nproc)"
-
-            # Verify it's actually static
-            file dropbearmulti
-            cp dropbearmulti "../dropbearmulti-${ARCH}"
-            popd
-            rm -rf "$BUILD_DIR"
+          for url in \
+            "https://matt.ucc.asn.au/dropbear/releases/dropbear-${DROPBEAR_VERSION}.tar.bz2" \
+            "https://dropbear.nl/mirror/releases/dropbear-${DROPBEAR_VERSION}.tar.bz2"; do
+            echo "Trying ${url}"
+            if curl --fail --location --silent --show-error \
+                --retry 2 --retry-all-errors --connect-timeout 15 --max-time 180 \
+                "${url}" --output "${archive}"; then
+              downloaded=true
+              break
+            fi
           done
 
-          echo ""
-          echo "All binaries:"
-          ls -lh dropbearmulti-*
+          if [[ "${downloaded}" != true || ! -s "${archive}" ]]; then
+            echo "Could not download Dropbear ${DROPBEAR_VERSION} from either upstream mirror." >&2
+            exit 1
+          fi
 
-      - name: Upload all binaries as artifact
-        uses: actions/upload-artifact@v4
+          tar -xjf "${archive}" -C "${RUNNER_TEMP}"
+          test -d "${RUNNER_TEMP}/dropbear-${DROPBEAR_VERSION}"
+
+      - name: Configure, build, and verify static multi-binary
+        shell: bash
+        env:
+          ZIG_TARGET: ${{ matrix.zig_target }}
+          EXTRA_CFLAGS: ${{ matrix.extra_cflags }}
+          EXPECTED_MACHINE: ${{ matrix.expected_machine }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/dropbear-${DROPBEAR_VERSION}"
+
+          export CC="zig cc -target ${ZIG_TARGET}"
+          export AR='zig ar'
+          export RANLIB='zig ranlib'
+          if [[ -n "${EXTRA_CFLAGS}" ]]; then
+            export CFLAGS="-Os ${EXTRA_CFLAGS}"
+          else
+            export CFLAGS='-Os'
+          fi
+
+          # Keep the existing size/minimal-runtime options.
+          ./configure \
+            --host="${ZIG_TARGET}" \
+            --enable-static \
+            --disable-zlib \
+            --disable-shadow \
+            --disable-lastlog \
+            --disable-utmp \
+            --disable-utmpx \
+            --disable-wtmp \
+            --disable-wtmpx \
+            --disable-pututline \
+            --disable-pututxline \
+            --disable-loginfunc \
+            --disable-pam
+
+          # MULTI=1 is essential: PROGRAMS lists applets, not the output filename.
+          make \
+            PROGRAMS='dropbear dbclient dropbearkey dropbearconvert scp' \
+            MULTI=1 \
+            STATIC=1 \
+            -j"$(nproc)"
+
+          test -s dropbearmulti
+          output="${GITHUB_WORKSPACE}/dropbearmulti-${ARCH}"
+          install -m 0755 dropbearmulti "${output}"
+
+          echo '--- Binary details ---'
+          file "${output}"
+          elf_header="$(readelf -h "${output}")"
+          grep -Fq "${EXPECTED_MACHINE}" <<< "${elf_header}" || {
+            echo "Wrong ELF machine for ${ARCH}; expected ${EXPECTED_MACHINE}." >&2
+            exit 1
+          }
+
+          # Reject a dynamic loader or shared-library dependency; this is stricter
+          # and more reliable than relying on a particular `file` output string.
+          program_headers="$(readelf -l "${output}")"
+          if grep -q 'INTERP' <<< "${program_headers}"; then
+            echo "${output} has a dynamic interpreter; it is not fully static." >&2
+            exit 1
+          fi
+          dynamic_section="$(readelf -d "${output}" 2>/dev/null || true)"
+          if grep -q '(NEEDED)' <<< "${dynamic_section}"; then
+            echo "${output} contains shared-library dependencies." >&2
+            exit 1
+          fi
+
+          echo "Validated static ${ARCH} binary: ${output}"
+
+      - name: Upload verified binary
+        uses: actions/upload-artifact@v7
         with:
-          name: dropbearmulti-all
-          path: dropbearmulti-*
+          name: dropbearmulti-${{ matrix.arch }}
+          path: dropbearmulti-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
 
   release:
-    needs: [check, build]
-    if: needs.check.outputs.should_build == 'true'
+    name: Publish complete release
+    needs: [resolve, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
+    env:
+      DROPBEAR_VERSION: ${{ needs.resolve.outputs.version }}
     steps:
-      - name: Download binaries
-        uses: actions/download-artifact@v4
+      - name: Download all architecture artifacts
+        uses: actions/download-artifact@v7
         with:
-          name: dropbearmulti-all
+          pattern: dropbearmulti-*
+          merge-multiple: true
 
-      - name: List binaries
-        run: ls -lh dropbearmulti-*
+      - name: Verify release set and generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(x86_64 aarch64 armv7 armv6 mipsel mips i686 riscv64)
+          for arch in "${expected[@]}"; do
+            binary="dropbearmulti-${arch}"
+            if [[ ! -s "${binary}" ]]; then
+              echo "Missing expected binary: ${binary}; refusing to publish a partial release." >&2
+              exit 1
+            fi
+          done
 
-      - name: "Publish as GitHub release (tag: dropbear-bins)"
-        uses: softprops/action-gh-release@v2
+          sha256sum dropbearmulti-* > SHA256SUMS
+          cat > BUILD-INFO.txt <<EOF
+          Dropbear version: ${DROPBEAR_VERSION}
+          Zig version: ${ZIG_VERSION}
+          Targets: x86_64, aarch64, armv7, armv6, mipsel, mips, i686, riscv64
+          Linking: static musl; release step requires no ELF interpreter or DT_NEEDED entries
+          EOF
+
+          ls -lh dropbearmulti-* SHA256SUMS BUILD-INFO.txt
+          cat SHA256SUMS
+
+      - name: Publish or update the dropbear-bins release
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: dropbear-bins
-          name: "Dropbear static musl binaries"
+          name: Dropbear ${{ needs.resolve.outputs.version }} static musl binaries
           body: |
-            Pre-built static dropbearmulti binaries used by Spud's setup.sh.
-            Built from dropbear 2024.86 with zig cc cross-compilation.
-            Regenerate by re-running the "Build dropbear static binaries" workflow.
-          files: dropbearmulti-*
-          make_latest: "false"
+            Statically linked Dropbear multi-binaries built from upstream Dropbear ${{ needs.resolve.outputs.version }} using Zig ${{ env.ZIG_VERSION }}.
+
+            Included applets: dropbear, dbclient, dropbearkey, dropbearconvert, and scp.
+            The release is only published if all eight architecture builds pass static-link and ELF-machine checks.
+
+            See BUILD-INFO.txt and SHA256SUMS for build details and SHA-256 checksums.
+          files: |
+            dropbearmulti-*
+            SHA256SUMS
+            BUILD-INFO.txt
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          make_latest: false
