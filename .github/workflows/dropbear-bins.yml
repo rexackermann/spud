@@ -6,12 +6,47 @@ name: Build dropbear static binaries
 
 on:
   workflow_dispatch:
+
+  # Every Monday at 03:00 UTC — picks up new dropbear releases automatically
+  schedule:
+    - cron: '0 3 * * 1'
+
+  # On every push: only run if the release doesn't exist yet OR the workflow changed
   push:
+    branches: [master, main]
     paths:
       - '.github/workflows/dropbear-bins.yml'
 
 jobs:
+  # On a plain push (not schedule/dispatch), skip the full build if the
+  # dropbear-bins release already exists — avoids rebuilding on every commit.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.chk.outputs.should_build }}
+    steps:
+      - name: Check if dropbear-bins release exists
+        id: chk
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Always build on schedule or manual dispatch
+          if [[ "${{ github.event_name }}" != "push" ]]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # On push: build only if release is missing
+          if gh release view dropbear-bins --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release already exists — skipping build."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release missing — will build."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -104,7 +139,8 @@ jobs:
           path: dropbearmulti-${{ matrix.arch }}
 
   release:
-    needs: build
+    needs: [check, build]
+    if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
