@@ -4,7 +4,7 @@
 # No VPS needed. Supports Windows 7 SP1+.
 #
 # Run as Administrator:
-#   iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/YOUR_USER/spud/main/setup.ps1'))
+#   iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/rex/spud/main/setup.ps1'))
 
 $ErrorActionPreference = "Stop"
 

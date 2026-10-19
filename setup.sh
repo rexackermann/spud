@@ -4,7 +4,7 @@
 # No VPS needed. No account needed.
 #
 # Usage (run as root on potato):
-#   curl -fsSL https://raw.githubusercontent.com/YOUR_USER/spud/main/setup.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/rex/spud/main/setup.sh | sh
 #
 # ── Configure these before publishing ────────────────────────────────────
 ADMIN_PUBKEY="ssh-ed25519 AAAA_REPLACE_WITH_YOUR_PUBLIC_KEY spud-admin"
@@ -65,7 +65,7 @@ detect_arch() {
         mips)                 echo "mips-unknown-linux-musl" ;;
         i386|i486|i586|i686) echo "i686-unknown-linux-musl" ;;
         riscv64)              echo "riscv64gc-unknown-linux-musl" ;;
-        *) die "Unsupported arch: $(uname -m). Open an issue at github.com/YOUR_USER/spud" ;;
+        *) die "Unsupported arch: $(uname -m). Open an issue at github.com/rex/spud" ;;
     esac
 }
 

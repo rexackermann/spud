@@ -50,7 +50,7 @@ NTFY_TOPIC_PREFIX="spud-XXXXXXXXXXXXXXXX"          # any random string, e.g. spu
 git init
 git add .
 git commit -m "Initial Spud setup"
-git remote add origin https://github.com/YOUR_USER/spud.git
+git remote add origin https://github.com/rex/spud.git
 git push -u origin main
 ```
 
@@ -60,12 +60,12 @@ git push -u origin main
 
 **Linux / embedded:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USER/spud/main/setup.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/rex/spud/main/setup.sh | sudo sh
 ```
 
 **Windows (run PowerShell as Administrator):**
 ```powershell
-iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/YOUR_USER/spud/main/setup.ps1'))
+iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/rex/spud/main/setup.ps1'))
 ```
 
 That's it. Within ~30 seconds your phone gets a notification:
