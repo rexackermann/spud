@@ -53,8 +53,10 @@ jobs:
             "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz" \
             -O zig.tar.xz
           tar -xJf zig.tar.xz
-          echo "$PWD/zig-linux-x86_64-${ZIG_VER}" >> "$GITHUB_PATH"
-          zig version
+          # GITHUB_PATH applies to subsequent steps only; use full path here
+          ZIG_DIR="$PWD/zig-linux-x86_64-${ZIG_VER}"
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
+          "$ZIG_DIR/zig" version
 
       - name: Download dropbear source
         run: |
