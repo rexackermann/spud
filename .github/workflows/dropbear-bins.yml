@@ -96,11 +96,14 @@ jobs:
             extra_cflags: '-mcpu=arm1176jzf_s'
             expected_machine: 'ARM'
           - arch: mipsel
-            zig_target: mipsel-linux-musl
+            # Spell out the MIPS EABI. This is the target triple used by
+            # established Zig cross-build workflows; plain *-linux-musl can
+            # select an ABI/toolchain combination that fails Autoconf's link test.
+            zig_target: mipsel-linux-musleabi
             extra_cflags: ''
             expected_machine: 'MIPS'
           - arch: mips
-            zig_target: mips-linux-musl
+            zig_target: mips-linux-musleabi
             extra_cflags: ''
             expected_machine: 'MIPS'
           - arch: i686
@@ -183,7 +186,21 @@ jobs:
           fi
 
           # Keep the existing size/minimal-runtime options.
-          ./configure \
+          # First test the actual cross compiler/linker outside Autoconf. If this
+          # fails, the direct Zig diagnostic is more useful than Autoconf's generic
+          # "C compiler cannot create executables" message.
+          probe="${RUNNER_TEMP}/zig-cc-probe-${ARCH}"
+          if ! printf '%s\n' 'int main(void) { return 0; }' | \
+              zig cc -target "${ZIG_TARGET}" -Os -o "${probe}" -x c -; then
+            echo "Zig could not compile/link a minimal program for ${ARCH} (${ZIG_TARGET})." >&2
+            echo "zig version: $(zig version)" >&2
+            zig cc -target "${ZIG_TARGET}" -v -Os -o "${probe}" -x c - <<< 'int main(void) { return 0; }' || true
+            exit 1
+          fi
+          file "${probe}"
+          readelf -h "${probe}" || true
+
+          if ! ./configure \
             --host="${ZIG_TARGET}" \
             --enable-static \
             --disable-zlib \
@@ -196,7 +213,15 @@ jobs:
             --disable-pututline \
             --disable-pututxline \
             --disable-loginfunc \
-            --disable-pam
+            --disable-pam; then
+            echo "configure failed for ${ARCH} (${ZIG_TARGET}); dumping config.log:" >&2
+            if [[ -f config.log ]]; then
+              cat config.log >&2
+            else
+              echo 'config.log was not generated.' >&2
+            fi
+            exit 1
+          fi
 
           # MULTI=1 is essential: PROGRAMS lists applets, not the output filename.
           make \
@@ -231,6 +256,16 @@ jobs:
           fi
 
           echo "Validated static ${ARCH} binary: ${output}"
+
+      - name: Upload configure diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dropbear-config-diagnostics-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/dropbear-${{ env.DROPBEAR_VERSION }}/config.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload verified binary
         uses: actions/upload-artifact@v7
